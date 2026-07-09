@@ -5,7 +5,7 @@
 ## In order to add Replica to your project, insert the following to wally.toml:
 ```toml
 [dependencies]
-ReplicaShared = "elentium/replicashared@1.0.1"
+ReplicaShared = "elentium/replicashared@1.0.2"
 ReplicaClient = "elentium/replicaclient@1.0.0"
 
 [server-dependencies]

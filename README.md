@@ -6,7 +6,7 @@
 ```toml
 [dependencies]
 ReplicaShared = "elentium/replicashared@1.0.2"
-ReplicaClient = "elentium/replicaclient@1.0.0"
+ReplicaClient = "elentium/replicaclient@1.0.1"
 
 [server-dependencies]
 ReplicaServer = "elentium/replicaserver@1.0.1"

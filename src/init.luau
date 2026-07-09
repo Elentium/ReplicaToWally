@@ -196,6 +196,27 @@ end
 
 ----- Service Table -----
 
+----- Loaded Services & Modules -----
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local function Load(Name: string)
+	local Packages: Folder = Madwork.WaitForDescendant(ReplicatedStorage, "Packages", "Folder")
+
+	local ReplicaShared = Packages:FindFirstChild("ReplicaShared")
+	if not ReplicaShared then
+		error(`[{script.Name}]: ReplicaShared does not exist. Make sure you installed the package properly`)
+	end
+
+	return require(ReplicaShared)[Name]
+end
+
+local RateLimiter = require(Load("RateLimit"))
+local MadworkMaid = require(Load("Maid"))
+local MadworkScriptSignal = require(Load("Signal"))
+Madwork.NewScriptSignal = MadworkScriptSignal.NewScriptSignal
+Madwork.NewArrayScriptConnection = MadworkScriptSignal.NewArrayScriptConnection
+
 local ReplicaService = {
 
 	ActivePlayers = {}, -- {Player = true, ...}
@@ -244,27 +265,6 @@ local ReplicaService = {
 
 	_replica_class = nil, -- Injection hook
 }
-
------ Loaded Services & Modules -----
-local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-
-local function Load(Name: string)
-	local Packages: Folder = Madwork.WaitForDescendant(ReplicatedStorage, "Packages", "Folder")
-
-	local ReplicaShared = Packages:FindFirstChild("ReplicaShared")
-	if not ReplicaShared then
-		error(`[{script.Name}]: ReplicaShared does not exist. Make sure you installed the package properly`)
-	end
-
-	return require(ReplicaShared)[Name]
-end
-
-local RateLimiter = require(Load("RateLimit"))
-local MadworkMaid = require(Load("Maid"))
-local MadworkScriptSignal = require(Load("Signal"))
-Madwork.NewScriptSignal = MadworkScriptSignal.NewScriptSignal
-Madwork.NewArrayScriptConnection = MadworkScriptSignal.NewArrayScriptConnection
 
 ----- Private Variables -----
 

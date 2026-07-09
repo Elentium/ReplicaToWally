@@ -1,1104 +1,993 @@
--- local Madwork = _G.Madwork
 --[[
-{Madwork}
+MAD STUDIO
 
--[ReplicaService]---------------------------------------
-	(STANDALONE VERSION)
-	Lua table replication achieved through write function wrapping
+-[Replica]---------------------------------------
 	
-	Understanding ReplicaService requires in-depth knowledge of RemoteEvent API:
-	https://developer.roblox.com/en-us/articles/Remote-Functions-and-Events
+	State replication with life cycle handling and individual client subscription control.
 	
-	WARNINGS FOR "Replica.Data" VALUES:
-		! Do not create numeric tables with gaps - attempting to replicate such tables will result in an error;
-		     For UserId references, convert UserIds to strings for use as keys!
-		! Do not create mixed tables (some values indexed by number and others by string key), as only
-		     the data indexed by number will be replicated.
-		! Do not index tables by anything other than numbers and strings.
-		! Do not reference functions
-		! Do not reference instances that are not replicated to clients 
-		+ All types of userdata (Vector3, Color3, CFrame...) and Instances that are currently replicated
-		to the client will replicate through ReplicaService.
-	
+	WARNING: Avoid numeric tables with gaps & non string/numeric keys - They can't be replicated!
+			
 	Members:
 	
-		ReplicaService.ActivePlayers               [table] {Player = true, ...} Players that have finished a handshake with ReplicaService
-		ReplicaService.NewActivePlayerSignal       [ScriptSignal] (player)
-		ReplicaService.RemovedActivePlayerSignal   [ScriptSignal] (player)
-		
-		ReplicaService.Temporary                   [Replica] -- Non replicated replica for nested replica creation
-		
-		ReplicaService.PlayerRequestedData         [ScriptSignal] (player) -- Fired at the moment of player requesting data, before
-			-- replicating any replicas
+		Replica.ReadyPlayers:        {[Player]: true}
+		Replica.NewReadyPlayer:      Signal<Player>
+		Replica.RemovingReadyPlayer: Signal<Player>
 	
 	Functions:
 	
-		ReplicaService.NewClassToken(class_name) --> [ReplicaClassToken]
-			-- Class tokens prevent the developer from creating replica class name collisions
+		Replica.Token(token: string): ReplicaToken -- Only one token object can be created for each unique "token: string"
 	
-		ReplicaService.NewReplica(replica_params) --> [Replica]
-			replica_params   [table]:
-				{
-					ClassToken = replica_class_token, -- Primary replica identifier
-					-- Optional params:
-					Tags = {}, -- Secondary replica identifiers: {["tag_name"] = tag_value, ...}
-					Data = {}, -- Table to be replicated (Data is not deep copied - retains reference)
-					Replication = "All" or {[Player] = true, ...} or [Player], -- "Replication" and "Parent" are mutually exclusive
-					Parent = replica, -- If Parent is not provided, created Replica will be a top-level Replica
-					WriteLib = write_lib_module,
+		Replica.New(params): Replica
+			params: {
+					Token: ReplicaToken,
+					-- Optional:
+					Tags: {}?, -- Immutable dictionary meant for identifying the Replica (e.g. UserId = 2312310)
+					Data: {}?, -- Initial replica state
+					WriteLib: ModuleScript?,
 				}
-				-- "Tags" and "Data" will default to empty tables;
-				-- "Replication" defaults to not replicated;
-				
-			write_lib_module   [ModuleScript] -- A shared write function library (ModuleScript Instance must be
-				replicated to clients); Create replicas with an assigned write_lib when network resources are limited.
-				Functions within write_lib receive numeric indexes and the functions themselves change the replica
-				data table through given parameters - this removes the need to send clients the "path" for data
-				updates thus greatly compressing packet size.
-				
-		ReplicaService.CheckWriteLib(module_script) -- Run-time error check
-			module_script   [ModuleScript] or nil -- nil will not error
-				
-	Members [ReplicaClassToken]:
-	
-		ReplicaClassToken.Class   [string]
-				
+		
+		Replica.FromId(id: number): Replica?
+		
 	Members [Replica]:
 	
-		Replica.Data       [table] (Read only) Table which is replicated
+		Replica.Tags:          {} -- Secondary Replica identifiers; Can only be set on creation
+		Replica.Data:          {} -- Table which is replicated; Can only be written to through setter methods server-side
 		
-		Replica.Id         [number] Unique identifier
-		Replica.Class      [string] Primary Replica identifier
-		Replica.Tags       [table] Secondary Replica identifiers
+		Replica.Id:            number -- Unique identifier
+		Replica.Token:         string -- Primary Replica identifier
 		
-		Replica.Parent     [Replica] or nil
-		Replica.Children   [table]: {replica, ...}
+		Replica.Parent:        Replica?
+		Replica.Children:      {[Replica]: true}
 		
-	Methods [Replica]:
+		Replica.BoundInstance: Instance?
 		
-	-- Dictionaries:
-		Replica:SetValue(path, value) -- !!! Avoid numeric tables with gaps
-		Replica:SetValues(path, values)  -- values = {key = value, ...} !!! Avoid numeric tables with gaps
+		Replica.OnServerEvent: Signal<Player, ...>
 		
-	-- (Numeric) Arrays:
-		Replica:ArrayInsert(path, value) --> new_index -- Performs table.insert(path, value)
-		Replica:ArraySet(path, index, value) -- Can only set to an already existing index within the array
-		Replica:ArrayRemove(path, index) --> removed_value -- Performs table.remove(path, index)
-		
-			path:
-				[string] = "TableMember.TableMember" -- Roblox-style path
-				[table] = {"Players", 2312310, "Health"} -- Key array path (Just use this always lol - string parsing is slow)
-			
-	-- Write library:
-		Replica:Write(function_name, params...) --> return_params... -- Run write function with given parameters
-			on server and client-side; (For replicas constructed with write_lib)
-		
-	-- Signals:
-		Replica:ConnectOnServerEvent(listener)  --> [ScriptConnection] (player, params...) -- listener functions can't yield
-		Replica:FireClient(player, params...) -- Fire a signal to client-side listeners for this specific Replica
-		Replica:FireAllClients(params...)
-		
-	-- Inheritance: (Only for descendant replicas; Can't create circular inheritance)
-		Replica:SetParent(replica)
-		
-	-- Replication: (Only for top level replicas - child replicas inherit replication settings)
-		Replica:ReplicateFor("All")
-		Replica:ReplicateFor(player)
-		Replica:DestroyFor("All")
-		Replica:DestroyFor(player) -- WARNING: Don't selectively destroy for clients when replica is replicated to all;
-			You may only selectively destroy for clients if the replica was selectively replicated to clients
-			
-	-- Debug:
-		Replica:Identify() --> [string]
-		
-	-- Cleanup:
+		Replica.Maid:          Maid?
 	
-		Replica:IsActive() --> is_active [bool] -- Returns false if the replica was destroyed
+	Methods [Component]:
 	
-		Replica:AddCleanupTask(task) -- Add cleanup task to be performed
-		Replica:RemoveCleanupTask(task) -- Remove cleanup task
+		-- (EXAMPLE) path: {"Players", "2312310", "Health"} -- A path defines a key branch within Replica.Data
+	
+		Replica:Set(path: {string | number}, value: any)
+		Replica:SetValues(path: {string | number}, values: {[string]: any})
+			
+		Replica:TableInsert(path: {string | number}, value: any, index: number?): number (new index) -- Performs table.insert(path, value)
+		Replica:TableRemove(path: {string | number}, index: number): any (removed value) -- Performs table.remove(path, index)
+		
+		Replica:Write(function_name: string, ...): ... -- Run WriteLib function with given parameters
+		
+		Replica:FireClient(player: Player, ...) -- Will not replicate to unsubscribed players
+		Replica:FireAllClients(...) -- Will not replicate to unsubscribed players
+		Replica:UFireClient(player: Player, ...) -- Same as "Replica:FireClient()", but using UnreliableRemoteEvent
+		Replica:UFireAllClients(...) -- Same as "Replica:FireAllClients()", but using UnreliableRemoteEvent
+		
+		Replica:SetParent(replica: Replica) -- Replication will be inherited from parent replica; Replication and bind methods will be locked.
+		
+		Replica:BindToInstance(instance: Instance) -- Players who observe the instance stream in
+			-- will be subscribed to this component; Observing the instance stream out
+			-- will destroy the component for the observing player; Replicas should be bound
+			-- to instances first and then ":Replicate()" or ":Subscribe()" should be called
+			-- after. A replica can only be bound once.
+			
+		Replica:Replicate() -- Subscribes all existing and future players; ":Subscribe()" and ":Unsubscribe()" will become locked
+		Replica:DontReplicate() -- Resets all previous subscription settings;
+		Replica:Subscribe(player) -- Replicates to player; WILL NOT subscribe to players that are not ready & will throw a warning for trying to do so.
+		Replica:Unsubscribe(player) -- Destroys Replica for player
+		
+		Replica:Identify(): string -- Debug
+
+		Replica:IsActive(): boolean
 		
 		Replica:Destroy() -- Destroys replica and all of its descendants (Depth-first)
-		
-			task:
-				[function] -- Function to be invoked when the Replica is destroyed (function can't yield)
-				[RBXScriptConnection] -- Roblox script connection to be :Disconnect()'ed when the Replica is destroyed
-				[Object] -- Object with a :Destroy() method to be destroyed when the Replica is destroyed (destruction method can't yield)
-		
+	
 --]]
 
-local Madwork -- Standalone Madwork reference for portable version of ReplicaService/ReplicaController
-do
-	local RunService = game:GetService("RunService")
-
-	local function WaitForDescendant(ancestor, instance_name, warn_name)
-		local instance = ancestor:FindFirstChild(instance_name, true) -- Recursive
-		if instance == nil then
-			local start_time = os.clock()
-			local connection
-			connection = ancestor.DescendantAdded:Connect(function(descendant)
-				if descendant.Name == instance_name then
-					instance = descendant
-				end
-			end)
-			while instance == nil do
-				if
-					start_time ~= nil
-					and os.clock() - start_time > 1
-					and (RunService:IsServer() == true or game:IsLoaded() == true)
-				then
-					start_time = nil
-					warn(
-						"["
-							.. script.Name
-							.. "]: Missing "
-							.. warn_name
-							.. ' "'
-							.. instance_name
-							.. '" in '
-							.. ancestor:GetFullName()
-							.. "; Please check setup documentation"
-					)
-				end
-				task.wait()
-			end
-			connection:Disconnect()
-			return instance
-		else
-			return instance
-		end
-	end
-
-	local RemoteEventContainer
-	if RunService:IsServer() == true then
-		RemoteEventContainer = Instance.new("Folder")
-		RemoteEventContainer.Name = "ReplicaRemoteEvents"
-		RemoteEventContainer.Parent = game:GetService("ReplicatedStorage")
-	else
-		RemoteEventContainer = WaitForDescendant(game:GetService("ReplicatedStorage"), "ReplicaRemoteEvents", "folder")
-	end
-
-	Madwork = {
-		SetupRemoteEvent = function(remote_name)
-			if RunService:IsServer() == true then
-				local remote_event = Instance.new("RemoteEvent")
-				remote_event.Name = remote_name
-				remote_event.Parent = RemoteEventContainer
-				return remote_event
-			else
-				return WaitForDescendant(RemoteEventContainer, remote_name, "remote event")
-			end
-		end,
-		Shared = {}, -- A Madwork package reference - ReplicaService will try to check this table
-		WaitForDescendant = WaitForDescendant,
-	}
-end
-
------ Service Table -----
-
------ Loaded Services & Modules -----
-local Players = game:GetService("Players")
+----- Services -----
+local CollectionService = game:GetService("CollectionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
 
-local function Load(Name: string)
-	local Packages: Folder = Madwork.WaitForDescendant(ReplicatedStorage, "Packages", "Folder")
+----- Dependencies -----
 
-	local ReplicaShared = Packages:FindFirstChild("ReplicaShared")
-	if not ReplicaShared then
-		error(`[{script.Name}]: ReplicaShared does not exist. Make sure you installed the package properly`)
-	end
+local ReplicaShared = ReplicatedStorage:WaitForChild("Packages")
+	:WaitForChild("_Index")
+	:WaitForChild("elentium_replicashared@1.0.2")
+	:WaitForChild("replicashared")
+local RateLimit = ReplicaShared.RateLimit
+local Remote = ReplicaShared.Remote
+local Signal = ReplicaShared.Signal
+local Maid = ReplicaShared.Maid
 
-	return require(ReplicaShared)[Name]
-end
+----- Private -----
 
-local RateLimiter = require(Load("RateLimit"))
-local MadworkMaid = require(Load("Maid"))
-local MadworkScriptSignal = require(Load("Signal"))
-Madwork.NewScriptSignal = MadworkScriptSignal.NewScriptSignal
-Madwork.NewArrayScriptConnection = MadworkScriptSignal.NewArrayScriptConnection
+local BIND_TAG = "Bind"
+local CS_TAG = "REPLICA" -- CollectionService tag
+local REPLICATION_ALL = "ALL"
+local MAID_LOCK = {}
+local EMPTY_TABLE = {}
 
-local ReplicaService = {
+local GlobalRateLimit = RateLimit.New(120)
 
-	ActivePlayers = {}, -- {Player = true, ...}
-	NewActivePlayerSignal = Madwork.NewScriptSignal(), -- (player)
-	RemovedActivePlayerSignal = Madwork.NewScriptSignal(), -- (player)
+local ReadyPlayers: { [Player]: boolean } = {}
 
-	PlayerRequestedData = Madwork.NewScriptSignal(), -- (player)
+local Replicas = {} -- {[id]: Replica}
+local TopReplicas = {} -- {[Replica]: true} -- Replicas with active subscription settings
+local ReplicationAllReplicas = {} -- {[Replica]: true} -- Replicas that had the method :Replicate() called on them
+local SelectiveSubscriptions = {} -- {[Player]: {[replica]: true}}
 
-	_replicas = {
-		--[[
-			[replica_id] = {
-				Data = {}, -- [table] Replicated Replica data table
-				Id = 1 -- [integer] (Read-only) Replica id
-				Class = "", -- [string] Primary Replica identifier
-				Tags = {PlayerId = 2312310}, -- [table] Secondary Replica identifiers
-				
-				Parent = Replica, -- [Replica / nil] -- Child replicas inherit replication settings
-				Children = {}, -- [table] {replica, ...}
-				
-				_creation_data = {["replica_id"] = {replica_class, replica_tags, data_table, parent_id / 0, write_lib_module / nil}, ...},
-					-- [table] A prepared table of all data a client will receive to construct this Replica and all it's descendants client-side
-					-- (Reference to top ancestor _creation_data table if child replica)
+local RemoteRequestData = Remote.New("ReplicaRequestData") -- Fired client-side when the client loads for the first time
 
-				_replication = {}, -- [table] Selective replication settings (Reference to top ancestor _replication table if child replica)
-					-- Possible settings:
-						-- _replication = {["All"] = true} -- Replica will be replicated to all players
-						-- _replication = {Player = true, ...} -- Replica will be replicated to selected players
-						-- _replication = {} -- Replica is currently not replicated to anyone
-				_pending_replication = {}, -- [table] Selective replication to players who are not fully loaded in
-						
-				_write_lib = {["function_name"] = {func_id, function}, ...} / nil, -- [table] List of wrapped write functions
-				
-				_signal_listeners = {},
-				_maid = maid,
-			},
-			...
-		--]]
-	},
+local RemoteSet = Remote.New("ReplicaSet") -- (replica_id, path, value)
+local RemoteSetValues = Remote.New("ReplicaSetValues") -- (replica_id, path, values)
+local RemoteTableInsert = Remote.New("ReplicaTableInsert") -- (replica_id, path, value, index)
+local RemoteTableRemove = Remote.New("ReplicaTableRemove") -- (replica_id, path, index)
+local RemoteWrite = Remote.New("ReplicaWrite") -- (replica_id, fn_id, ...)
+local RemoteSignal = Remote.New("ReplicaSignal") -- (replica_id, ...)
+local RemoteParent = Remote.New("ReplicaParent") -- (replica_id, parent_id)
+local RemoteCreate = Remote.New("ReplicaCreate") -- (creation, root_id?) or ({creation, ...})
+local RemoteBind = Remote.New("ReplicaBind") -- (replica_id)
+local RemoteDestroy = Remote.New("ReplicaDestroy") -- (replica_id)
+local RemoteSignalUnreliable = Remote.New("ReplicaSignalUnreliable", true) -- (replica_id, ...)
 
-	_top_level_replicas = { -- References to top level replicas for decreased load when handling new and leaving players
-		--[[
-			[replica_id] = Replica, -- [Replica]
-			...
-		--]]
-	},
+local Index = 0
 
-	_replica_class = nil, -- Injection hook
-}
+local WriteLibCache: { [ModuleScript]: { [string | number]: { Id: number, fn: (...any) -> ...any } } } = {}
+local WriteFlag = false
+local Tokens: { [string]: boolean } = {}
+local TokenValidate = {}
 
------ Private Variables -----
+local BindValuePrefab = Instance.new("NumberValue")
+BindValuePrefab.Name = "ReplicaBind"
+CollectionService:AddTag(BindValuePrefab, CS_TAG)
 
-local DefaultRateLimiter = RateLimiter.Default
-
-local ActivePlayers = ReplicaService.ActivePlayers
-local Replicas = ReplicaService._replicas
-local TopLevelReplicas = ReplicaService._top_level_replicas
-
-local rev_ReplicaRequestData = Madwork.SetupRemoteEvent("Replica_ReplicaRequestData") -- Fired client-side when the client loads for the first time
-
-local rev_ReplicaSetValue = Madwork.SetupRemoteEvent("Replica_ReplicaSetValue") -- (replica_id, {path}, value)
-local rev_ReplicaSetValues = Madwork.SetupRemoteEvent("Replica_ReplicaSetValues") -- (replica_id, {path}, {values})
-local rev_ReplicaArrayInsert = Madwork.SetupRemoteEvent("Replica_ReplicaArrayInsert") -- (replica_id, {path}, value)
-local rev_ReplicaArraySet = Madwork.SetupRemoteEvent("Replica_ReplicaArraySet") -- (replica_id, {path}, index, value)
-local rev_ReplicaArrayRemove = Madwork.SetupRemoteEvent("Replica_ReplicaArrayRemove") -- (replica_id, {path}, index)
-local rev_ReplicaWrite = Madwork.SetupRemoteEvent("Replica_ReplicaWrite") -- (replica_id, func_id, params...)
-local rev_ReplicaSignal = Madwork.SetupRemoteEvent("Replica_ReplicaSignal") -- (replica_id, params...)
-local rev_ReplicaSetParent = Madwork.SetupRemoteEvent("Replica_ReplicaSetParent") -- (replica_id, parent_replica_id)
-local rev_ReplicaCreate = Madwork.SetupRemoteEvent("Replica_ReplicaCreate") -- (replica_id, {replica_data}) OR (top_replica_id, {creation_data}) or ({replica_package})
-local rev_ReplicaDestroy = Madwork.SetupRemoteEvent("Replica_ReplicaDestroy") -- (replica_id)
-
-local ReplicaIndex = 0
-
-local LoadedWriteLibs = {} -- {[ModuleScript] = {["function_name"] = {func_id, function}, ...}, ...}
-
-local WriteFunctionFlag = false
-
-local CreatedClassTokens = {} -- [class_name] = true
-
-local LockReplicaMethods = {} -- A metatable to be set for destroyed replicas
-LockReplicaMethods.__index = LockReplicaMethods
-
------ Private functions -----
-
-local function ParseReplicaBranch(replica, func) -- func(replica)
-	func(replica)
-	for _, child in ipairs(replica.Children) do
-		ParseReplicaBranch(child, func)
+local function IterateGroup(replica, fn) -- fn(replica)
+	fn(replica)
+	for child in pairs(replica.Children) do
+		IterateGroup(child, fn)
 	end
 end
 
-local function GetWriteLibFunctionsRecursive(list_table, pointer, name_stack)
-	for key, value in pairs(pointer) do
-		if type(value) == "table" then
-			GetWriteLibFunctionsRecursive(list_table, value, name_stack .. key .. ".")
-		elseif type(value) == "function" then
-			table.insert(list_table, { name_stack .. key, value })
-		else
-			error(
-				'[ReplicaService]: Invalid write function value "'
-					.. tostring(value)
-					.. '" ('
-					.. typeof(value)
-					.. '); name_stack = "'
-					.. name_stack
-					.. '"'
-			)
+local function LoadWriteLib(module: ModuleScript)
+	local write_lib = WriteLibCache[module]
+
+	if write_lib ~= nil then
+		return write_lib -- WriteLib module was previously loaded
+	end
+
+	if typeof(module) ~= "Instance" or module:IsA("ModuleScript") ~= true then
+		error(`[{script.Name}]: "WriteLib" is not a ModuleScript`)
+	elseif module:IsDescendantOf(ReplicatedStorage) == false then
+		error(`[{script.Name}]: "WriteLib" module must be a descendant of ReplicatedStorage`)
+	end
+
+	local loaded_module = require(module)
+
+	if type(loaded_module) ~= "table" then
+		error(`[{script.Name}]: A "WriteLib" ModuleScript must return a table`)
+	end
+
+	local function_list = {} -- fn_id = {fn_name, fn}
+
+	for key, value in pairs(loaded_module) do
+		if type(key) ~= "string" then
+			error(`[{script.Name}]: "WriteLib" table keys must be strings`)
+		elseif type(value) ~= "function" then
+			error(`[{script.Name}]: "WriteLib" table values must be functions`)
 		end
-	end
-end
-
-local function LoadWriteLib(write_lib_module)
-	local get_write_lib = LoadedWriteLibs[write_lib_module]
-	if get_write_lib ~= nil then
-		return get_write_lib -- Write lib module was previously loaded
+		table.insert(function_list, { key, value })
 	end
 
-	if write_lib_module.ClassName ~= "ModuleScript" then
-		error("[ReplicaService]: Invalid write_lib_module argument")
-	end
-
-	if write_lib_module:IsDescendantOf(ReplicatedStorage) == false then
-		local found_in_shared = false
-		for _, dir in pairs(Madwork.Shared) do
-			if write_lib_module:IsDescendantOf(dir) == true then
-				found_in_shared = true
-				break
-			end
-		end
-		if found_in_shared == false then
-			error(
-				'[ReplicaService]: Write library module must be a descendant of ReplicatedStorage or "Shared" directory'
-			)
-		end
-	end
-
-	local write_lib_raw = require(write_lib_module)
-	if type(write_lib_raw) ~= "table" then
-		error("[ReplicaService]: A write library ModuleScript must return a table")
-	end
-
-	local function_list = {} -- func_id = {func_name, func}
-
-	GetWriteLibFunctionsRecursive(function_list, write_lib_raw, "")
 	table.sort(function_list, function(item1, item2)
 		return item1[1] < item2[1] -- Sort functions by their names - this creates a consistent indexing on server and client-side
 	end)
 
-	local write_lib = {} -- {["function_name"] = {func_id, function}, ...}
+	write_lib = {} -- {["fn_name" | fn_id] = {Id = fn_id, fn = fn}, ...}
 
-	for func_id, func_params in ipairs(function_list) do
-		write_lib[func_params[1]] = { func_id, func_params[2] }
+	for fn_id, fn_entry in ipairs(function_list) do
+		local entry_table = { Id = fn_id, fn = fn_entry[2] }
+		write_lib[fn_entry[1]] = entry_table
+		write_lib[fn_id] = entry_table
 	end
 
-	LoadedWriteLibs[write_lib_module] = write_lib
+	WriteLibCache[module] = write_lib
 
 	return write_lib
 end
 
-local function StringPathToArray(path)
-	local path_array = {}
-	if path ~= "" then
-		for s in string.gmatch(path, "[^%.]+") do
-			table.insert(path_array, s)
-		end
-	end
-	return path_array
+function GenerateCreation(replica)
+	local replication = {}
+	local creation = {}
+	IterateGroup(replica, function(group_replica)
+		local self_creation = group_replica.self_creation
+		self_creation[4] = if group_replica.Parent == nil then 0 else group_replica.Parent.Id
+		creation[tostring(group_replica.Id)] = self_creation
+		group_replica.creation = creation
+		group_replica.replication = replication
+	end)
 end
 
-local function DestroyReplicaAndDescendantsRecursive(replica, not_first_in_stack)
+----- Public -----
+
+export type Replica = {
+	Tags: { [any]: any },
+	Data: { [any]: any },
+	Id: number,
+	Token: string,
+	Parent: Replica?,
+	Children: { [Replica]: boolean? },
+	BoundInstance: Instance?,
+	OnServerEvent: { Connect: (self: any, listener: (Player, ...any) -> ()) -> { Disconnect: (self: any) -> () } },
+	Maid: typeof(Maid),
+
+	Set: (self: any, path: { string }, value: any) -> (),
+	SetValues: (self: any, path: { string }, values: { [string]: any }) -> (),
+	TableInsert: (self: any, path: { string }, value: any, index: number?) -> number,
+	TableRemove: (self: any, path: { string }, index: number) -> any,
+	Write: (self: any, function_name: string, ...any) -> ...any,
+	FireClient: (self: any, player: Player, ...any) -> (),
+	FireAllClients: (self: any, ...any) -> (),
+	UFireClient: (self: any, player: Player, ...any) -> (),
+	UFireAllClients: (self: any, ...any) -> (),
+	SetParent: (self: any, new_parent: Replica) -> (),
+	BindToInstance: (self: any, instance: Instance) -> (),
+	Replicate: (self: any) -> (),
+	DontReplicate: (self: any) -> (),
+	Subscribe: (self: any, player: Player) -> (),
+	Unsubscribe: (self: any, player: Player) -> (),
+	Identify: (self: any) -> string,
+	IsActive: (self: any) -> boolean,
+	Destroy: (self: any) -> (),
+}
+
+local Replica = {
+	ReadyPlayers = ReadyPlayers,
+	NewReadyPlayer = Signal.New(),
+	RemovingReadyPlayer = Signal.New(),
+}
+Replica.__index = Replica
+
+local ReplicaToken = {}
+ReplicaToken.__index = ReplicaToken
+
+local LockedReplica = {}
+LockedReplica.__index = LockedReplica
+
+function Replica.Token(name: string)
+	if type(name) ~= "string" then
+		error(`[{script.Name}]: name must be a string`)
+	end
+
+	if Tokens[name] == true then
+		error(`[{script.Name}]: Token "{name}" duplicate`)
+	end
+
+	Tokens[name] = true
+
+	local self = setmetatable({
+		Name = name,
+	}, ReplicaToken)
+
+	TokenValidate[self] = true
+
+	return self
+end
+
+function Replica.New(params: { Token: typeof(ReplicaToken), Tags: {}?, Data: {}?, WriteLib: ModuleScript? }): Replica
+	local token = params.Token
+	local tags = params.Tags or {}
+	local data = params.Data or {}
+	local write_lib = nil
+
+	if TokenValidate[token] == nil then
+		error(`[{script.Name}]: "Token" is not valid ({tostring(token)})`)
+	elseif type(tags) ~= "table" then
+		error(`[{script.Name}]: "Tags" is not a table`)
+	elseif type(data) ~= "table" then
+		error(`[{script.Name}]: "Data" is not a table`)
+	elseif tags[BIND_TAG] ~= nil then
+		error(`[{script.Name}]: "Tags.{BIND_TAG}" key is reserved`)
+	end
+
+	if params.WriteLib ~= nil then
+		write_lib = LoadWriteLib(params.WriteLib)
+	end
+
+	Index += 1
+
+	local self = setmetatable({
+		Tags = tags,
+		Data = data,
+		Id = Index,
+		Token = token.Name,
+		Parent = nil,
+		Children = {},
+		BoundInstance = nil,
+		OnServerEvent = Signal.New(),
+		Maid = Maid.New(MAID_LOCK),
+
+		self_creation = { token.Name, tags, data, 0, params.WriteLib },
+		creation = nil, -- ["replica_id"] = {token, tags, data, parent_id, write_lib}, ...
+		replication = nil, -- {REPLICATION_ALL = true} or {[Player] = true, ...}
+
+		write_lib = write_lib,
+		write_lib_module = params.WriteLib,
+		bind_value = nil,
+	}, Replica)
+
+	Replicas[Index] = self
+
+	return self
+end
+
+function Replica.FromId(id: number): Replica
+	return Replicas[id]
+end
+
+function Replica.Test()
+	return {
+		Replicas = Replicas, -- [id] = Replica, ...
+		TopReplicas = TopReplicas, -- [Replica] = true, ... -- Replicas with active subsciption settings
+		ReplicationAllReplicas = ReplicationAllReplicas, -- [Replica] = true, ... -- Replicas that had the method :Replicate() called on them
+		SelectiveSubscriptions = SelectiveSubscriptions, -- [Player] = {[replica] = true, ...}
+	}
+end
+
+function Replica:Set(path: { string }, value: any)
+	-- Apply local change:
+
+	local pointer = self.Data
+	for i = 1, #path - 1 do
+		pointer = pointer[path[i]]
+	end
+	pointer[path[#path]] = value
+
+	-- Replicate change:
+
+	if WriteFlag == false then
+		local self_id = self.Id
+		if self.replication ~= nil then
+			if self.replication[REPLICATION_ALL] == true then
+				for player in pairs(ReadyPlayers) do
+					RemoteSet:FireClient(player, self_id, path, value)
+				end
+			else
+				for player in pairs(self.replication) do
+					RemoteSet:FireClient(player, self_id, path, value)
+				end
+			end
+		end
+	end
+end
+
+function Replica:SetValues(path: { string }, values: { [string]: any })
+	-- Apply local change:
+
+	local pointer = self.Data
+	for _, key in ipairs(path) do
+		pointer = pointer[key]
+	end
+	for key, value in pairs(values) do
+		pointer[key] = value
+	end
+
+	-- Replicate change:
+
+	if WriteFlag == false then
+		local self_id = self.Id
+		if self.replication ~= nil then
+			if self.replication[REPLICATION_ALL] == true then
+				for player in pairs(ReadyPlayers) do
+					RemoteSetValues:FireClient(player, self_id, path, values)
+				end
+			else
+				for player in pairs(self.replication) do
+					RemoteSetValues:FireClient(player, self_id, path, values)
+				end
+			end
+		end
+	end
+end
+
+function Replica:TableInsert(path: { string }, value: any, index: number?): number
+	-- Apply local change:
+
+	local pointer = self.Data
+	for _, key in ipairs(path) do
+		pointer = pointer[key]
+	end
+	if index ~= nil then
+		table.insert(pointer, index, value)
+	else
+		table.insert(pointer, value)
+	end
+
+	-- Replicate change:
+
+	if WriteFlag == false then
+		local self_id = self.Id
+		if self.replication ~= nil then
+			if self.replication[REPLICATION_ALL] == true then
+				for player in pairs(ReadyPlayers) do
+					RemoteTableInsert:FireClient(player, self_id, path, value, index)
+				end
+			else
+				for player in pairs(self.replication) do
+					RemoteTableInsert:FireClient(player, self_id, path, value, index)
+				end
+			end
+		end
+	end
+
+	return index or #pointer
+end
+
+function Replica:TableRemove(path: { string }, index: number): any
+	-- Apply local change:
+
+	local pointer = self.Data
+	for _, key in ipairs(path) do
+		pointer = pointer[key]
+	end
+	local removed_value = table.remove(pointer, index)
+
+	-- Replicate change:
+
+	if WriteFlag == false then
+		local self_id = self.Id
+		if self.replication ~= nil then
+			if self.replication[REPLICATION_ALL] == true then
+				for player in pairs(ReadyPlayers) do
+					RemoteTableRemove:FireClient(player, self_id, path, index)
+				end
+			else
+				for player in pairs(self.replication) do
+					RemoteTableRemove:FireClient(player, self_id, path, index)
+				end
+			end
+		end
+	end
+
+	return removed_value
+end
+
+function Replica:Write(function_name: string, ...): ...any
+	local write_lib_entry = self.write_lib[function_name]
+
+	if WriteFlag == true then -- Chained :Write()
+		return write_lib_entry.fn(self, ...)
+	end
+
+	-- Apply local change:
+
+	WriteFlag = true
+	local return_params = table.pack(pcall(write_lib_entry.fn, self, ...))
+	WriteFlag = false
+
+	if return_params[1] ~= true then
+		error(`[{script.Name}]: (WriteLib) ` .. tostring(return_params[2]))
+	end
+
+	table.remove(return_params, 1)
+
+	-- Replicate change:
+
+	local self_id = self.Id
+	local fn_id = write_lib_entry.Id
+
+	if self.replication ~= nil then
+		if self.replication[REPLICATION_ALL] == true then
+			for player in pairs(ReadyPlayers) do
+				RemoteWrite:FireClient(player, self_id, fn_id, ...)
+			end
+		else
+			for player in pairs(self.replication) do
+				RemoteWrite:FireClient(player, self_id, fn_id, ...)
+			end
+		end
+	end
+
+	return table.unpack(return_params)
+end
+
+function Replica:FireClient(player, ...)
+	if self.replication ~= nil then
+		if
+			(self.replication[REPLICATION_ALL] == true and ReadyPlayers[player] == true)
+			or self.replication[player] ~= nil
+		then
+			RemoteSignal:FireClient(player, self.Id, ...)
+		end
+	end
+end
+
+function Replica:FireAllClients(...)
+	local self_id = self.Id
+	if self.replication ~= nil then
+		if self.replication[REPLICATION_ALL] == true then
+			for player in pairs(ReadyPlayers) do
+				RemoteSignal:FireClient(player, self_id, ...)
+			end
+		else
+			for player in pairs(self.replication) do
+				RemoteSignal:FireClient(player, self_id, ...)
+			end
+		end
+	end
+end
+
+function Replica:UFireClient(player, ...)
+	if self.replication ~= nil then
+		if
+			(self.replication[REPLICATION_ALL] == true and ReadyPlayers[player] == true)
+			or self.replication[player] ~= nil
+		then
+			RemoteSignalUnreliable:FireClient(player, self.Id, ...)
+		end
+	end
+end
+
+function Replica:UFireAllClients(...)
+	local self_id = self.Id
+	if self.replication ~= nil then
+		if self.replication[REPLICATION_ALL] == true then
+			for player in pairs(ReadyPlayers) do
+				RemoteSignalUnreliable:FireClient(player, self_id, ...)
+			end
+		else
+			for player in pairs(self.replication) do
+				RemoteSignalUnreliable:FireClient(player, self_id, ...)
+			end
+		end
+	end
+end
+
+function Replica:SetParent(new_parent)
+	if type(new_parent) ~= "table" or getmetatable(new_parent) ~= Replica then
+		error(`[{script.Name}]: new_parent is not a Replica ({tostring(new_parent)})`)
+	elseif Replicas[new_parent.Id] == nil then
+		error(`[{script.Name}]: Can't set destroyed Replica as parent`)
+	end
+
+	-- Top Replica / Bind check:
+
+	if TopReplicas[self] ~= nil then
+		error(`[{script.Name}]: Can't change parent for top level Replica`)
+	end
+
+	if self.BoundInstance ~= nil then
+		error(`[{script.Name}]: Can't change parent for bound Replica`)
+	end
+
+	-- Recursion check:
+
+	local recursion_check = new_parent
+
+	while recursion_check ~= nil do
+		recursion_check = recursion_check.Parent
+		if recursion_check == self then
+			error(`[{script.Name}]: Can't set descendant Replica as parent`)
+		end
+	end
+
+	-- Hierarchy:
+
+	local old_parent = self.Parent
+
+	if old_parent == new_parent then
+		return
+	end
+
+	self.Parent = new_parent
+
+	if old_parent ~= nil then
+		old_parent.Children[self] = nil
+	end
+
+	new_parent.Children[self] = true
+
+	-- Altering creation and replication tables:
+
+	IterateGroup(self, function(group_replica)
+		local string_id = tostring(group_replica.Id)
+		if old_parent ~= nil and old_parent.creation ~= nil then
+			old_parent.creation[string_id] = nil
+		end
+		if new_parent.creation ~= nil then
+			local self_creation = group_replica.self_creation
+			self_creation[4] = group_replica.Parent.Id
+			new_parent.creation[string_id] = self_creation
+		end
+		group_replica.creation = new_parent.creation
+		group_replica.replication = new_parent.replication
+	end)
+
+	-- Subscriptions:
+
+	local self_id = self.Id
+	local parent_id = new_parent.Id
+	local parent_creation = new_parent.creation
+
+	local old_subscriptions = EMPTY_TABLE
+
+	if old_parent ~= nil and old_parent.replication ~= nil then
+		if old_parent.replication[REPLICATION_ALL] == true then
+			old_subscriptions = ReadyPlayers
+		else
+			old_subscriptions = old_parent.replication
+		end
+	end
+
+	local new_subscriptions = EMPTY_TABLE
+
+	if new_parent ~= nil and new_parent.replication ~= nil then
+		if new_parent.replication[REPLICATION_ALL] == true then
+			new_subscriptions = ReadyPlayers
+		else
+			new_subscriptions = new_parent.replication
+		end
+	end
+
+	-- Informing clients who lost subscription to replica group:
+
+	if old_parent ~= nil and old_parent.replication ~= nil then
+		if new_parent.replication ~= old_parent.replication and new_subscriptions ~= ReadyPlayers then
+			for player in pairs(old_subscriptions) do
+				if new_subscriptions[player] == nil then
+					RemoteDestroy:FireClient(player, self_id)
+				end
+			end
+		end
+	end
+
+	-- Informing clients who gained subscription to replica group / who retained the subscription:
+
+	if new_parent.replication ~= nil then
+		local custom_creation
+
+		for player in pairs(new_subscriptions) do
+			if old_subscriptions[player] == true then
+				RemoteParent:FireClient(player, self_id, parent_id) -- Subscription was retained
+			else
+				if custom_creation == nil then -- Generating custom_creation if at least one new subscription was made
+					custom_creation = {}
+					IterateGroup(self, function(group_replica)
+						local string_id = tostring(group_replica.Id)
+						custom_creation[string_id] = parent_creation[string_id]
+					end)
+				end
+				RemoteCreate:FireClient(player, custom_creation, self_id)
+			end
+		end
+	end
+end
+
+function Replica:BindToInstance(instance: Instance)
+	if typeof(instance) ~= "Instance" then
+		error(`[{script.Name}]: "instance" argument is not an Instance ({tostring(instance)})`)
+	end
+
+	if self.Parent ~= nil then
+		error(`[{script.Name}]: Can't bind Replica parented to another Replica`)
+	end
+
+	if self.BoundInstance ~= nil then
+		error(`[{script.Name}]: Can't change Replica bind to another Instance`)
+	end
+
+	if
+		instance:IsA("Model") == true
+		and (
+			instance.ModelStreamingMode == Enum.ModelStreamingMode.Default
+			or instance.ModelStreamingMode == Enum.ModelStreamingMode.Nonatomic
+		)
+	then
+		warn(
+			`[{script.Name}]: Bound Replica to a model that has improper "ModelStreamingMode" setup; Traceback:\n`
+				.. debug.traceback()
+		)
+	end
+
+	local bind_value = BindValuePrefab:Clone()
+	bind_value.Value = self.Id
+
+	self.Tags[BIND_TAG] = true
+	self.BoundInstance = instance
+	self.bind_value = bind_value
+
+	bind_value.Parent = instance
+
+	local self_id = self.Id
+	if self.replication ~= nil then
+		if self.replication[REPLICATION_ALL] == true then
+			for player in pairs(ReadyPlayers) do
+				RemoteBind:FireClient(player, self_id)
+			end
+		else
+			for player in pairs(self.replication) do
+				RemoteBind:FireClient(player, self_id)
+			end
+		end
+	end
+end
+
+function Replica:Replicate()
+	if self.Parent ~= nil then
+		error(`[{script.Name}]: Can't selectively replicate Replica parented to another Replica`)
+	end
+
+	if self.creation == nil then
+		GenerateCreation(self)
+		TopReplicas[self] = true
+	elseif self.replication[REPLICATION_ALL] == true then
+		return
+	end
+
+	local creation = self.creation
+	local replication = self.replication
+
+	for player in pairs(ReadyPlayers) do
+		if replication[player] == nil then
+			RemoteCreate:FireClient(player, creation)
+		else
+			local selective_lookup = SelectiveSubscriptions[player]
+			selective_lookup[self] = nil
+		end
+	end
+
+	table.clear(replication)
+	replication[REPLICATION_ALL] = true
+	ReplicationAllReplicas[self] = true
+end
+
+function Replica:DontReplicate()
+	if self.Parent ~= nil then
+		error(`[{script.Name}]: Can't selectively replicate Replica parented to another Replica`)
+	end
+
+	local replication = self.replication
+
+	if replication == nil or next(replication) == nil then
+		return
+	end
+
+	ReplicationAllReplicas[self] = nil
+
+	local self_id = self.Id
+
+	if replication[REPLICATION_ALL] == true then
+		for player in pairs(ReadyPlayers) do
+			RemoteDestroy:FireClient(player, self_id)
+		end
+	else
+		for player in pairs(replication) do
+			RemoteDestroy:FireClient(player, self_id)
+			SelectiveSubscriptions[player][self] = nil
+		end
+	end
+
+	table.clear(replication)
+end
+
+function Replica:Subscribe(player: Player)
+	if self.Parent ~= nil then
+		error(`[{script.Name}]: Can't selectively replicate Replica parented to another Replica`)
+	end
+
+	if self.creation == nil then
+		GenerateCreation(self)
+		TopReplicas[self] = true
+	elseif self.replication[REPLICATION_ALL] == true then
+		error(`[{script.Name}]: "Subscribe()" is locked after calling "Replicate()"`)
+	end
+
+	if ReadyPlayers[player] == nil then
+		warn(`[{script.Name}]: Called "Subscribe()" on a non-ready player; Traceback:\n` .. debug.traceback())
+		return
+	end
+
+	local creation = self.creation
+	local replication = self.replication
+
+	if replication[player] ~= nil then
+		return -- Already subscribed
+	end
+
+	replication[player] = true
+	SelectiveSubscriptions[player][self] = true
+	RemoteCreate:FireClient(player, creation)
+end
+
+function Replica:Unsubscribe(player: Player)
+	if self.Parent ~= nil then
+		error(`[{script.Name}]: Can't selectively replicate Replica parented to another Replica`)
+	end
+
+	local replication = self.replication
+
+	if replication == nil then
+		return
+	end
+
+	if replication[REPLICATION_ALL] == true then
+		error(`[{script.Name}]: "Unsubscribe()" is locked after calling "Replicate()"`)
+	end
+
+	if replication[player] ~= nil then
+		replication[player] = nil
+		SelectiveSubscriptions[player][self] = nil
+		RemoteDestroy:FireClient(player, self.Id)
+	end
+end
+
+function Replica:Identify(): string
+	local tag_string = ""
+	local first_tag = true
+	for key, value in pairs(self.Tags) do
+		tag_string ..= `{if first_tag == true then "" else ";"}{tostring(key)}={tostring(value)}`
+		first_tag = false
+	end
+	return `[Id:{self.Id};Token:{self.Token};Tags:[{tag_string}]]`
+end
+
+function Replica:IsActive(): boolean
+	return self.Maid:IsActive()
+end
+
+local function DestroyReplica(replica)
 	-- Scan children replicas:
-	for _, child in ipairs(replica.Children) do
-		DestroyReplicaAndDescendantsRecursive(child, true)
+	for child in pairs(replica.Children) do
+		DestroyReplica(child)
 	end
 
 	local id = replica.Id
 	-- Clear replica entry:
 	Replicas[id] = nil
 	-- Cleanup:
-	replica._maid:Cleanup()
-	-- Remove _creation_data entry:
-	replica._creation_data[tostring(id)] = nil
-	-- Clear from children table of top parent replica:
-	if not_first_in_stack ~= true then -- ehhhh... Yeah.
-		if replica.Parent ~= nil then
-			local children = replica.Parent.Children
-			table.remove(children, table.find(children, replica))
-		else
-			TopLevelReplicas[id] = nil
-		end
+	replica.Maid:Unlock(MAID_LOCK)
+	replica.Maid:Cleanup()
+	-- Bind cleanup:
+	if replica.BoundInstance ~= nil then
+		replica.BoundInstance = nil
+		replica.bind_value:Destroy()
+		replica.bind_value = nil
+	end
+	-- Remove creation data:
+	if replica.creation ~= nil then
+		replica.creation[tostring(id)] = nil
 	end
 	-- Swap metatables:
-	setmetatable(replica, LockReplicaMethods)
-end
-
------ Public functions -----
-
--- Replica object:
-
-local Replica = {}
-Replica.__index = Replica
-ReplicaService._replica_class = Replica
-
--- Dictionaries:
-function Replica:SetValue(path, value)
-	local path_array = (type(path) == "string") and StringPathToArray(path) or path
-	-- Apply change server-side:
-	local pointer = self.Data
-	for i = 1, #path_array - 1 do
-		pointer = pointer[path_array[i]]
-	end
-	pointer[path_array[#path_array]] = value
-	-- Replicate change:
-	if WriteFunctionFlag == false then
-		local id = self.Id
-		if self._replication["All"] == true then
-			for player in pairs(ActivePlayers) do
-				rev_ReplicaSetValue:FireClient(player, id, path_array, value)
-			end
-		else
-			for player in pairs(self._replication) do
-				rev_ReplicaSetValue:FireClient(player, id, path_array, value)
-			end
-		end
-	end
-end
-
-function Replica:SetValues(path, values)
-	local path_array = (type(path) == "string") and StringPathToArray(path) or path
-	-- Apply change server-side:
-	local pointer = self.Data
-	for i = 1, #path_array do
-		pointer = pointer[path_array[i]]
-	end
-	for key, value in pairs(values) do
-		pointer[key] = value
-	end
-	-- Replicate change:
-	if WriteFunctionFlag == false then
-		local id = self.Id
-		if self._replication["All"] == true then
-			for player in pairs(ActivePlayers) do
-				rev_ReplicaSetValues:FireClient(player, id, path_array, values)
-			end
-		else
-			for player in pairs(self._replication) do
-				rev_ReplicaSetValues:FireClient(player, id, path_array, values)
-			end
-		end
-	end
-end
-
--- (Numeric) Arrays:
-function Replica:ArrayInsert(path, value) --> new_index
-	local path_array = (type(path) == "string") and StringPathToArray(path) or path
-	-- Apply change server-side:
-	local pointer = self.Data
-	for i = 1, #path_array do
-		pointer = pointer[path_array[i]]
-	end
-	table.insert(pointer, value)
-	-- Replicate change:
-	if WriteFunctionFlag == false then
-		local id = self.Id
-		if self._replication["All"] == true then
-			for player in pairs(ActivePlayers) do
-				rev_ReplicaArrayInsert:FireClient(player, id, path_array, value)
-			end
-		else
-			for player in pairs(self._replication) do
-				rev_ReplicaArrayInsert:FireClient(player, id, path_array, value)
-			end
-		end
-	end
-	return #pointer
-end
-
-function Replica:ArraySet(path, index, value)
-	local path_array = (type(path) == "string") and StringPathToArray(path) or path
-	-- Apply change server-side:
-	local pointer = self.Data
-	for i = 1, #path_array do
-		pointer = pointer[path_array[i]]
-	end
-	if pointer[index] ~= nil then
-		pointer[index] = value
-	else
-		error("[ReplicaService]: Replica:ArraySet() can only be used for existing indexes")
-	end
-	-- Replicate change:
-	if WriteFunctionFlag == false then
-		local id = self.Id
-		if self._replication["All"] == true then
-			for player in pairs(ActivePlayers) do
-				rev_ReplicaArraySet:FireClient(player, id, path_array, index, value)
-			end
-		else
-			for player in pairs(self._replication) do
-				rev_ReplicaArraySet:FireClient(player, id, path_array, index, value)
-			end
-		end
-	end
-end
-
-function Replica:ArrayRemove(path, index) --> removed_value
-	local path_array = (type(path) == "string") and StringPathToArray(path) or path
-	-- Apply change server-side:
-	local pointer = self.Data
-	for i = 1, #path_array do
-		pointer = pointer[path_array[i]]
-	end
-	local removed_value = table.remove(pointer, index)
-	-- Replicate change:
-	if WriteFunctionFlag == false then
-		local id = self.Id
-		if self._replication["All"] == true then
-			for player in pairs(ActivePlayers) do
-				rev_ReplicaArrayRemove:FireClient(player, id, path_array, index)
-			end
-		else
-			for player in pairs(self._replication) do
-				rev_ReplicaArrayRemove:FireClient(player, id, path_array, index)
-			end
-		end
-	end
-	return removed_value
-end
-
--- Write library:
-function Replica:Write(function_name, ...) --> return_params...
-	if WriteFunctionFlag == true then -- Chained :Write()
-		return self._write_lib[function_name][2](self, ...)
-	end
-	-- Apply change server-side:
-	WriteFunctionFlag = true
-	local return_params = table.pack(self._write_lib[function_name][2](self, ...))
-	WriteFunctionFlag = false
-	-- Replicate change:
-	local id = self.Id
-	local func_id = self._write_lib[function_name][1]
-	if self._replication["All"] == true then
-		for player in pairs(ActivePlayers) do
-			rev_ReplicaWrite:FireClient(player, id, func_id, ...)
-		end
-	else
-		for player in pairs(self._replication) do
-			rev_ReplicaWrite:FireClient(player, id, func_id, ...)
-		end
-	end
-	return table.unpack(return_params)
-end
-
--- Signals:
-function Replica:ConnectOnServerEvent(listener) --> [ScriptConnection]
-	if type(listener) ~= "function" then
-		error("[ReplicaService]: Only functions can be passed to Replica:ConnectOnServerEvent()")
-	end
-	table.insert(self._signal_listeners, listener)
-	return Madwork.NewArrayScriptConnection(self._signal_listeners, listener)
-end
-
-function Replica:FireClient(player, ...)
-	if (self._replication["All"] == true and ActivePlayers[player] == true) or self._replication[player] ~= nil then
-		rev_ReplicaSignal:FireClient(player, self.Id, ...)
-	end
-end
-
-function Replica:FireAllClients(...)
-	local id = self.Id
-	if self._replication["All"] == true then
-		for player in pairs(ActivePlayers) do
-			rev_ReplicaSignal:FireClient(player, id, ...)
-		end
-	else
-		for player in pairs(self._replication) do
-			rev_ReplicaSignal:FireClient(player, id, ...)
-		end
-	end
-end
-
--- Inheritance:
-
-function Replica:SetParent(new_parent)
-	assert(type(new_parent) == "table", "[ReplicaService]: Invalid parent_replica")
-	assert(new_parent._replication ~= nil, "[ReplicaService]: Invalid parent_replica")
-	local circular_check = new_parent
-	while circular_check ~= nil do
-		circular_check = circular_check.Parent
-		if circular_check == self then
-			error("[ReplicaService]: Can't parent replica to it's descendant")
-		end
-	end
-	local old_parent = self.Parent
-	if old_parent == nil then
-		error("[ReplicaService]: Can't change parent for top level replicas")
-	end
-	if new_parent == old_parent then
-		return
-	end
-	local replica_id = self.Id
-	self.Parent = new_parent
-	table.remove(old_parent.Children, table.find(old_parent.Children, self))
-	table.insert(new_parent.Children, self)
-	local old_replication = old_parent._replication
-	local new_replication = new_parent._replication
-	if old_replication ~= new_replication then -- Top level ancestor changed:
-		local old_creation_data = old_parent._creation_data
-		local new_creation_data = new_parent._creation_data
-		self._creation_data = new_creation_data
-		-- Create temporary creation data:
-		local temporary_creation_data = {} -- [string_id] = creation_data_of_one
-		ParseReplicaBranch(self, function(transfered_replica)
-			local replica_id_string = tostring(transfered_replica.Id)
-			temporary_creation_data[replica_id_string] = old_creation_data[replica_id_string]
-			transfered_replica._replication = new_replication -- Swapping _replication reference for reparented replicas
-			transfered_replica._creation_data = new_creation_data
-		end)
-		temporary_creation_data[tostring(replica_id)][4] = new_parent.Id
-		-- Modify creation data for top replicas:
-		for string_id, creation_data_of_one in pairs(temporary_creation_data) do
-			old_creation_data[string_id] = nil
-			new_creation_data[string_id] = creation_data_of_one
-		end
-		-- Inform clients about the change:
-		-- 1) Clients who have this replica AND the new parent replica only need to know the new parent id
-		local no_replication_check = ActivePlayers
-		if new_replication.All ~= true then
-			no_replication_check = new_replication
-		elseif old_replication.All ~= true then
-			no_replication_check = old_replication
-		end
-		for player in pairs(no_replication_check) do
-			if
-				(old_replication[player] == true or old_replication.All == true)
-				and (new_replication[player] == true or new_replication.All == true)
-			then
-				rev_ReplicaSetParent:FireClient(player, replica_id, new_parent.Id)
-			end
-		end
-		-- 2) Create for clients that have the new parent replica, but not the old parent replica
-		local replicate_for_players = {}
-		if old_replication.All ~= true then
-			if new_replication.All ~= true then
-				for player in pairs(new_replication) do
-					if old_replication[player] ~= true then
-						replicate_for_players[player] = true
-					end
-				end
-			else
-				for player in pairs(ActivePlayers) do
-					if old_replication[player] ~= true then
-						replicate_for_players[player] = true
-					end
-				end
-			end
-		end
-		for player in pairs(replicate_for_players) do
-			rev_ReplicaCreate:FireClient(player, replica_id, temporary_creation_data)
-		end
-		-- 3) Destroy for clients that do not have the new parent replica
-		if new_replication.All ~= true then
-			if old_replication.All ~= true then
-				for player in pairs(old_replication) do
-					if new_replication[player] ~= true then
-						rev_ReplicaDestroy:FireClient(player, replica_id)
-					end
-				end
-			else
-				for player in pairs(ActivePlayers) do
-					if new_replication[player] ~= true then
-						rev_ReplicaDestroy:FireClient(player, replica_id)
-					end
-				end
-			end
-		end
-	else -- Top level ancestor did not change:
-		self._creation_data[tostring(replica_id)][4] = new_parent.Id
-		if old_replication.All == true then
-			for player in pairs(ActivePlayers) do
-				rev_ReplicaSetParent:FireClient(player, replica_id, new_parent.Id)
-			end
-		else
-			for player in pairs(old_replication) do
-				rev_ReplicaSetParent:FireClient(player, replica_id, new_parent.Id)
-			end
-		end
-	end
-end
-
--- Replication:
-function Replica:ReplicateFor(param)
-	if self.Parent ~= nil then
-		error("[ReplicaService]: Replica:ReplicateFor() can only be used for top level replicas")
-	end
-	if Replicas[self.Id] == nil then
-		error("[ReplicaService]: Can't change replication settings for a destroyed replica")
-	end
-
-	local replication = self._replication
-	local pending_replication = self._pending_replication
-	if replication["All"] ~= true then
-		if param == "All" then
-			-- Create replica for clients who weren't replicated to yet:
-			local id = self.Id
-			for player in pairs(ActivePlayers) do
-				if replication[player] == nil then
-					rev_ReplicaCreate:FireClient(player, id, self._creation_data)
-				end
-			end
-			-- Clear selective replication settings:
-			for player in pairs(replication) do
-				replication[player] = nil
-			end
-			for player in pairs(pending_replication) do
-				pending_replication[player] = nil
-			end
-			-- Set replication to all:
-			replication["All"] = true
-		elseif ActivePlayers[param] == true then
-			if replication[param] == nil then
-				-- Create replica for client:
-				replication[param] = true
-				rev_ReplicaCreate:FireClient(param, self.Id, self._creation_data)
-			end
-		elseif typeof(param) == "Instance" then
-			if param.ClassName ~= "Player" then
-				error("[ReplicaService]: Invalid param argument")
-			end
-			pending_replication[param] = true
-		end
-	else
-		if param ~= "All" then
-			error(
-				'[ReplicaService]: Don\'t selectively replicate for clients when replica is replicated to All - :DestroyFor("All") first'
-			)
-		end
-	end
-end
-
-function Replica:DestroyFor(param)
-	if self.Parent ~= nil then
-		error("[ReplicaService]: Replica:DestroyFor() can only be used for top level replicas")
-	end
-	if Replicas[self.Id] == nil then
-		error("[ReplicaService]: Can't change replication settings for a destroyed replica")
-	end
-
-	local replication = self._replication
-	if replication[param] ~= nil and ActivePlayers[param] == true then
-		-- Destroy replica for client:
-		replication[param] = nil
-		rev_ReplicaDestroy:FireClient(param, self.Id)
-	elseif param == "All" then
-		local id = self.Id
-		if replication["All"] == true then
-			-- Destroy replica for all active clients:
-			replication["All"] = nil
-			for player in pairs(ActivePlayers) do
-				rev_ReplicaDestroy:FireClient(player, id)
-			end
-		else
-			-- Destroy replica for all clients who were replicated to:
-			for player in pairs(replication) do
-				replication[player] = nil
-				rev_ReplicaDestroy:FireClient(player, id)
-			end
-		end
-	elseif replication["All"] == true then -- Don't do this
-		error("[ReplicaService]: Don't selectively destroy for clients when replica is replicated to All")
-	elseif typeof(param) == "Instance" then
-		if param.ClassName ~= "Player" then
-			error("[ReplicaService]: Invalid param argument")
-		end
-		self._pending_replication[param] = nil
-	end
-end
-
--- Debug:
-function Replica:Identify() --> [string]
-	local tag_string = ""
-	local first_tag = true
-	for tag_key, tag_val in pairs(self.Tags) do
-		tag_string = tag_string .. (first_tag and "" or ";") .. tostring(tag_key) .. "=" .. tostring(tag_val)
-	end
-	return "[Id:" .. tostring(self.Id) .. ";Class:" .. self.Class .. ";Tags:{" .. tag_string .. "}]"
-end
-
--- Cleanup:
-
-function Replica:IsActive() --> is_active [bool]
-	return Replicas[self.Id] ~= nil
-end
-
-function Replica:AddCleanupTask(task)
-	return self._maid:AddCleanupTask(task)
-end
-
-function Replica:RemoveCleanupTask(task)
-	self._maid:RemoveCleanupTask(task)
+	setmetatable(replica, LockedReplica)
 end
 
 function Replica:Destroy()
-	-- Destroy replica for all clients who were replicated to:
-	local id = self.Id
-	if Replicas[id] == nil then
+	local self_id = self.Id
+
+	if Replicas[self_id] == nil then
 		return
 	end
-	if self._replication["All"] == true then
-		for player in pairs(ActivePlayers) do
-			rev_ReplicaDestroy:FireClient(player, id)
-		end
-	else
-		for player in pairs(self._replication) do
-			rev_ReplicaDestroy:FireClient(player, id)
-		end
-	end
-	-- Recursive destruction
-	DestroyReplicaAndDescendantsRecursive(self)
-end
 
--- Module functions:
+	local is_top = TopReplicas[self] == true
 
-function ReplicaService.NewClassToken(class_name) --> [ReplicaClassToken]
-	if type(class_name) ~= "string" then
-		error("[ReplicaService]: class_name must be a string")
-	end
-	if CreatedClassTokens[class_name] == true then
-		error('[ReplicaService]: Token for replica class "' .. class_name .. '" was already created')
-	end
-	CreatedClassTokens[class_name] = true
-	return {
-		Class = class_name,
-	}
-end
+	-- Destroy replica for all clients who were replicated to:
 
-function ReplicaService.NewReplica(replica_params) --> [Replica]
-	local class_token = replica_params.ClassToken
-	local replica_tags = replica_params.Tags or {}
-	local data_table = replica_params.Data or {}
-
-	local replication_settings = replica_params.Replication
-
-	if type(class_token) ~= "table" or type(class_token.Class) ~= "string" then
-		error("[ReplicaService]: missing or invalid replica_params.ClassToken argument")
-	end
-	if type(replica_tags) ~= "table" then
-		error("[ReplicaService]: replica_params.Tags must be a table")
-	end
-	if type(data_table) ~= "table" then
-		error("[ReplicaService]: replica_params.Data must be a table")
-	end
-
-	local replica_class = class_token.Class
-
-	ReplicaIndex = ReplicaIndex + 1
-
-	local parent = replica_params.Parent
-	local replication
-	local pending_replication
-	local creation_data
-
-	if parent ~= nil then
-		if Replicas[parent.Id] == nil then
-			error("[ReplicaService]: Passed replica_params.Parent replica is destroyed")
-		end
-	end
-
-	if parent ~= nil and replication_settings ~= nil then
-		error("[ReplicaService]: Can't set replica_params.Replication for a replica that has a parent")
-	elseif replication_settings == nil then
-		replication = {}
-		pending_replication = {}
-	else
-		-- Parsing replica_params.Replication:
-		if type(replication_settings) == "table" then -- Must be a player list {player = true, ...} OR an empty table {}
-			if replication_settings["All"] ~= nil then
-				error('[ReplicaService]: To replicate replica to all, do replica_params.Replication = "All"')
-			end
-			replication = {}
-			pending_replication = {}
-			for player in pairs(replication_settings) do
-				if typeof(player) ~= "Instance" or player.ClassName ~= "Player" then
-					error("[ReplicaService]: Invalid replica_params.Replication")
-				end
-				if ActivePlayers[player] == true then
-					replication[player] = true
-				else
-					pending_replication[player] = true
-				end
-			end
-		elseif replication_settings == "All" then
-			replication = { ["All"] = true }
-			pending_replication = {}
-		elseif typeof(replication_settings) == "Instance" then -- Must be a player
-			if replication_settings.ClassName == "Player" then
-				if ActivePlayers[replication_settings] == true then
-					replication = { [replication_settings] = true }
-					pending_replication = {}
-				else
-					replication = {}
-					pending_replication = { [replication_settings] = true }
-				end
-			else
-				error("[ReplicaService]: Invalid value for param1")
+	if self.replication ~= nil then
+		if self.replication[REPLICATION_ALL] == true then
+			for player in pairs(ReadyPlayers) do
+				RemoteDestroy:FireClient(player, self_id)
 			end
 		else
-			error(
-				"[ReplicaService]: Invalid value for replica_params.Replication ("
-					.. tostring(replication_settings)
-					.. ")"
-			)
+			for player in pairs(self.replication) do
+				RemoteDestroy:FireClient(player, self_id)
+				if is_top == true then
+					SelectiveSubscriptions[player][self] = nil
+				end
+			end
 		end
 	end
 
-	-- Load write_lib_module if present:
-	local write_lib = nil
-	if replica_params.WriteLib ~= nil then
-		write_lib = LoadWriteLib(replica_params.WriteLib)
+	-- Clearing hierarchy:
+
+	TopReplicas[self] = nil
+	ReplicationAllReplicas[self] = nil
+
+	if self.Parent ~= nil then
+		self.Parent.Children[self] = nil
 	end
 
-	-- Getting references to parent replication and creation data:
-	if parent ~= nil then
-		replication = parent._replication
-		pending_replication = parent._pending_replication
-		creation_data = parent._creation_data
-	else
-		creation_data = {}
-	end
+	-- Recursive destruction:
 
-	local creation_data_of_one =
-		{ replica_class, replica_tags, data_table, (parent ~= nil) and parent.Id or 0, replica_params.WriteLib }
-	creation_data[tostring(ReplicaIndex)] = creation_data_of_one
-
-	-- New Replica object table:
-	local replica = {
-		Data = data_table,
-		Id = ReplicaIndex,
-
-		Class = replica_class,
-		Tags = replica_tags,
-		Parent = parent,
-		Children = {},
-		_creation_data = creation_data,
-		_replication = replication,
-		_pending_replication = pending_replication,
-
-		_write_lib = write_lib,
-
-		_signal_listeners = {},
-		_maid = MadworkMaid.NewMaid(),
-	}
-	setmetatable(replica, Replica)
-
-	if parent ~= nil then
-		table.insert(parent.Children, replica)
-	end
-
-	-- Replicating new replica:
-	if replication["All"] == true then
-		for player in pairs(ActivePlayers) do
-			rev_ReplicaCreate:FireClient(player, ReplicaIndex, creation_data_of_one)
-		end
-	else
-		for player in pairs(replication) do
-			rev_ReplicaCreate:FireClient(player, ReplicaIndex, creation_data_of_one)
-		end
-	end
-
-	-- Adding replica to replica list:
-	Replicas[ReplicaIndex] = replica
-	if parent == nil then
-		TopLevelReplicas[ReplicaIndex] = replica
-	end
-
-	return replica
+	DestroyReplica(self)
 end
 
-function ReplicaService.CheckWriteLib(module_script)
-	if module_script ~= nil then
-		LoadWriteLib(module_script)
-	end
-end
+----- Init -----
 
------ Initialize -----
-
--- Creating LockReplicaMethods members:
-do
+do -- Destroyed replica metatable:
 	local keep_methods = {
 		Identify = true,
-		AddCleanupTask = true,
-		RemoveCleanupTask = true,
 		Destroy = true,
-		IsActive = true,
 	}
-	for method_name, func in pairs(Replica) do
-		if method_name ~= "__index" then
-			if keep_methods[method_name] == true then
-				LockReplicaMethods[method_name] = func
+
+	for name, fn in pairs(Replica) do
+		if name ~= "__index" then
+			if keep_methods[name] == true then
+				LockedReplica[name] = fn
 			else
-				LockReplicaMethods[method_name] = function(self)
-					error(
-						'[ReplicaService]: Tried to call method "'
-							.. method_name
-							.. '" for a destroyed replica; '
-							.. self:Identify()
-					)
+				LockedReplica[name] = function(self)
+					error(`[{script.Name}]: Tried to call method "{name}" for a destroyed replica; {self:Identify()}`)
 				end
 			end
 		end
 	end
 end
 
--- Temporary replica:
-ReplicaService.Temporary = ReplicaService.NewReplica({
-	ClassToken = ReplicaService.NewClassToken("Temporary"),
-})
-
------ Connections -----
-
 -- New player data replication:
-rev_ReplicaRequestData.OnServerEvent:Connect(function(player)
-	if ActivePlayers[player] ~= nil then
+
+RemoteRequestData.OnServerEvent:Connect(function(player: Player)
+	if ReadyPlayers[player] ~= nil and player:IsDescendantOf(Players) == true then
 		return
 	end
 
-	-- Provide the client with first server time reference:
-	ReplicaService.PlayerRequestedData:Fire(player)
-
-	-- Move player from pending replication to active replication
-	for _replica_id, replica in pairs(TopLevelReplicas) do
-		if replica._pending_replication[player] ~= nil then
-			replica._pending_replication[player] = nil
-			replica._replication[player] = true
-		end
-	end
 	-- Make the client create all replicas that are initially replicated to the client;
-	-- Pack up and send intially replicated replicas:
-	local replica_package = {} -- {replica_id, creation_data}
-	for replica_id, replica in pairs(TopLevelReplicas) do
-		if replica._replication[player] ~= nil or replica._replication["All"] == true then
-			table.insert(replica_package, { replica_id, replica._creation_data })
-		end
+	-- Pack up and send initially replicated replicas:
+
+	local creation = {}
+
+	for replica in pairs(ReplicationAllReplicas) do
+		table.insert(creation, replica.creation)
 	end
-	rev_ReplicaCreate:FireClient(player, replica_package)
+	RemoteCreate:FireClient(player, creation)
+
 	-- Let the client know that all replica data has been sent:
-	rev_ReplicaRequestData:FireClient(player)
+	RemoteRequestData:FireClient(player)
+
 	-- Set player to active:
-	ActivePlayers[player] = true
-	ReplicaService.NewActivePlayerSignal:Fire(player)
+	ReadyPlayers[player] = true
+	SelectiveSubscriptions[player] = {}
+	Replica.NewReadyPlayer:Fire(player)
 end)
 
 -- Client-invoked replica signals:
-rev_ReplicaSignal.OnServerEvent:Connect(function(player, replica_id, ...)
+
+local function RemoteSignalHandle(player: Player, id: number, ...)
 	-- Missing player prevention, spam prevention and exploit prevention:
-	if
-		ActivePlayers[player] == nil
-		or DefaultRateLimiter:CheckRate(player) == false
-		or type(replica_id) ~= "number"
-	then
+	if ReadyPlayers[player] == nil or GlobalRateLimit:CheckRate(player) == false or type(id) ~= "number" then
 		return
 	end
 
-	local replica = Replicas[replica_id]
+	local replica = Replicas[id]
+
 	if replica ~= nil then
-		if replica._replication[player] ~= nil or replica._replication["All"] == true then
-			local signal_listeners = replica._signal_listeners
-			for i = 1, #signal_listeners do
-				signal_listeners[i](player, ...)
-			end
+		if
+			replica.replication ~= nil
+			and (replica.replication[REPLICATION_ALL] == true or replica.replication[player] ~= nil)
+		then
+			replica.OnServerEvent:Fire(player, ...)
 		end
 	end
-end)
+end
+
+RemoteSignal.OnServerEvent:Connect(RemoteSignalHandle)
+RemoteSignalUnreliable.OnServerEvent:Connect(RemoteSignalHandle)
 
 -- Player leave handling:
+
 Players.PlayerRemoving:Connect(function(player)
-	-- Remove player from subscription settings:
-	for _, replica in pairs(TopLevelReplicas) do
-		replica._replication[player] = nil
-		replica._pending_replication[player] = nil
+	if ReadyPlayers[player] == nil then
+		return
 	end
+
+	-- Remove player from subscription settings:
+
+	for replica in pairs(SelectiveSubscriptions[player]) do
+		replica.replication[player] = nil
+	end
+
 	-- Remove player from ready players list:
-	ActivePlayers[player] = nil
-	ReplicaService.RemovedActivePlayerSignal:Fire(player)
+
+	ReadyPlayers[player] = nil
+	SelectiveSubscriptions[player] = nil
+	Replica.RemovingReadyPlayer:Fire(player)
 end)
 
-return ReplicaService
+return Replica

@@ -9,5 +9,5 @@ ReplicaShared = "elentium/replicashared@1.0.2"
 ReplicaClient = "elentium/replicaclient@1.0.1"
 
 [server-dependencies]
-ReplicaServer = "elentium/replicaserver@1.0.3"
+ReplicaServer = "elentium/replicaserver@1.0.4"
 ```

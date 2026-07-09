@@ -257,12 +257,7 @@ local function Load(Name: string)
 		error(`[{script.Name}]: ReplicaShared does not exist. Make sure you installed the package properly`)
 	end
 
-	local Module = ReplicaShared:FindFirstChild(Name)
-	if not Module then
-		error(`[{script.Name}]: {Name} does not exist.`)
-	end
-
-	return Module
+	return require(ReplicaShared)[Name]
 end
 
 local RateLimiter = require(Load("RateLimit"))

@@ -99,7 +99,7 @@ if not Packages then
 	end
 end
 local ReplicaShared =
-	Packages:WaitForChild("_Index"):WaitForChild("elentium_replicashared@1.0.2"):WaitForChild("replicashared")
+	require(Packages:WaitForChild("_Index"):WaitForChild("elentium_replicashared@1.0.2"):WaitForChild("replicashared"))
 local RateLimit = ReplicaShared.RateLimit
 local Remote = ReplicaShared.Remote
 local Signal = ReplicaShared.Signal

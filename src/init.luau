@@ -90,10 +90,16 @@ local Players = game:GetService("Players")
 
 ----- Dependencies -----
 
-local ReplicaShared = ReplicatedStorage:WaitForChild("Packages")
-	:WaitForChild("_Index")
-	:WaitForChild("elentium_replicashared@1.0.2")
-	:WaitForChild("replicashared")
+local Packages = ReplicatedStorage:FindFirstChild("Packages", true)
+if not Packages then
+	task.wait(0.1)
+	Packages = ReplicatedStorage:FindFirstChild("Packages", true)
+	if not Packages then
+		error(`[{script.Name}]: Packages folder not found`)
+	end
+end
+local ReplicaShared =
+	Packages:WaitForChild("_Index"):WaitForChild("elentium_replicashared@1.0.2"):WaitForChild("replicashared")
 local RateLimit = ReplicaShared.RateLimit
 local Remote = ReplicaShared.Remote
 local Signal = ReplicaShared.Signal

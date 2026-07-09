@@ -67,11 +67,8 @@ MAD STUDIO
 
 ----- Dependencies -----
 
-local ReplicaShared = script.Parent:FindFirstChild("ReplicaShared")
-if not ReplicaShared then
-	error(`[{script.Name}]: ReplicaShared package not found; make sure you properly installed it`)
-end
-ReplicaShared = require(ReplicaShared)
+local ReplicaSharedPackage = script.Parent.Parent:WaitForChild("elentium_replicashared@1.0.2")
+local ReplicaShared = require(ReplicaSharedPackage:WaitForChild("replicashared"))
 local Remote = ReplicaShared.Remote
 local Signal = ReplicaShared.Signal
 local Maid = ReplicaShared.Maid
